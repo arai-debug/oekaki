@@ -263,12 +263,18 @@
     transform: scale(1.08);
   }
 
+  .sizes {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 7px;
+  }
   .tools {
     display: grid;
-    grid-template-columns: repeat(3, 1fr) repeat(3, 46px);
+    grid-template-columns: repeat(6, 1fr);
     gap: 7px;
     align-items: center;
   }
+  .tools .icon-btn { width: auto; }
   .size-btn {
     padding: 0;
     height: 46px;
@@ -280,7 +286,13 @@
     border-radius: 50%;
     background: var(--ink);
   }
-  .size-btn[aria-pressed="true"] { background: var(--bg-deep); border-color: var(--ink-soft); }
+  .size-btn[aria-pressed="true"],
+  .brush[aria-pressed="true"] {
+    background: var(--bg-deep);
+    border-color: var(--ink-soft);
+    box-shadow: inset 0 0 0 2px var(--ink);
+  }
+  .brush-ic { fill: currentColor !important; stroke: none !important; }
 
   /* ---- ほんだな ---- */
   .shelf-grid {
@@ -424,10 +436,18 @@
 
     <div class="colors" id="colors"></div>
 
+    <div class="sizes" id="sizes"></div>
+
     <div class="tools">
-      <button class="size-btn" data-size="14" aria-pressed="false" aria-label="ほそい"><span style="width:8px;height:8px"></span></button>
-      <button class="size-btn" data-size="30" aria-pressed="true" aria-label="ふつう"><span style="width:15px;height:15px"></span></button>
-      <button class="size-btn" data-size="60" aria-pressed="false" aria-label="ふとい"><span style="width:24px;height:24px"></span></button>
+      <button class="icon-btn brush" data-brush="normal" aria-pressed="true" aria-label="ふつう">
+        <svg class="brush-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5"/></svg>
+      </button>
+      <button class="icon-btn brush" data-brush="soft" aria-pressed="false" aria-label="うすく かく">
+        <svg class="brush-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.5" opacity=".36"/><circle cx="15.5" cy="9.5" r="4.5" opacity=".36"/></svg>
+      </button>
+      <button class="icon-btn brush" data-brush="spray" aria-pressed="false" aria-label="スプレー">
+        <svg class="brush-ic" viewBox="0 0 24 24"><circle cx="12" cy="6.5" r="1.5"/><circle cx="8" cy="10" r="1.4"/><circle cx="16" cy="10" r="1.4"/><circle cx="12" cy="12" r="1.7"/><circle cx="6.8" cy="14.5" r="1.2"/><circle cx="17" cy="14.6" r="1.2"/><circle cx="12" cy="16.5" r="1.3"/><circle cx="9" cy="19" r="1.1"/><circle cx="15" cy="19" r="1.1"/></svg>
+      </button>
       <button class="icon-btn" id="eraser" aria-pressed="false" aria-label="けしゴム">
         <svg viewBox="0 0 24 24"><path d="M4 16.5 11.5 9l6 6-4 4H7z"/><path d="M11.5 9 16 4.5a1.5 1.5 0 0 1 2.1 0l3.4 3.4a1.5 1.5 0 0 1 0 2.1L17.5 15"/><path d="M5 20h15"/></svg>
       </button>
@@ -697,46 +717,125 @@
   var pad = $("pad");
   var g = pad.getContext("2d");
   var S = 1200;
+
+  // かきおわった せん をためる ばしょ と、いま ひいている せん の ばしょ
+  var com = document.createElement("canvas"); com.width = S; com.height = S;
+  var gc = com.getContext("2d");
+  var lay = document.createElement("canvas"); lay.width = S; lay.height = S;
+  var gl = lay.getContext("2d");
+
+  var SIZES = [8, 18, 34, 60, 110];
+  var SIZE_DOTS = [7, 11, 16, 22, 30];
+  var BRUSH = {
+    normal: { alpha: 1,    live: "fast" },
+    soft:   { alpha: 0.38, live: "layer" },
+    spray:  { alpha: 1,    live: "present" }
+  };
+
   var strokes = [];
-  var cur = null;
+  var cur = null, curRng = null;
   var color = COLORS[0];
-  var size = 30;
+  var size = SIZES[1];
+  var brush = "normal";
   var erasing = false;
 
   function sizeCanvas() { /* CSS が おおきさを きめる。なかみは 1200x1200 で こてい */ }
 
-  function clearPad() {
-    g.fillStyle = PAPER;
-    g.fillRect(0, 0, S, S);
+  // スプレーの つぶを「まいかい おなじ ばしょ」に もどせるようにする
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
   }
 
-  function strokeLine(st, a, b) {
-    g.strokeStyle = st.color;
-    g.lineWidth = st.w;
-    g.lineCap = "round";
-    g.lineJoin = "round";
-    g.beginPath();
-    g.moveTo(a.x * S, a.y * S);
-    g.lineTo(b.x * S, b.y * S);
-    g.stroke();
+  function fillPaper(ctx) { ctx.fillStyle = PAPER; ctx.fillRect(0, 0, S, S); }
+
+  function present() {
+    g.clearRect(0, 0, S, S);
+    g.drawImage(com, 0, 0);
+    if (cur && BRUSH[cur.brush].live === "layer") {
+      g.globalAlpha = BRUSH[cur.brush].alpha;
+      g.drawImage(lay, 0, 0);
+      g.globalAlpha = 1;
+    }
   }
 
-  function strokeDot(st, p) {
-    g.fillStyle = st.color;
-    g.beginPath();
-    g.arc(p.x * S, p.y * S, st.w / 2, 0, Math.PI * 2);
-    g.fill();
+  function dot(ctx, st, p) {
+    ctx.fillStyle = st.color;
+    ctx.beginPath();
+    ctx.arc(p.x * S, p.y * S, st.w / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function seg(ctx, st, a, b) {
+    ctx.strokeStyle = st.color;
+    ctx.lineWidth = st.w;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.x * S, a.y * S);
+    ctx.lineTo(b.x * S, b.y * S);
+    ctx.stroke();
+  }
+
+  function sprayDot(ctx, st, p, rng) {
+    var R = st.w * 1.25;
+    var n = Math.max(3, Math.round(st.w / 4));
+    var r = Math.max(0.9, st.w * 0.085);
+    ctx.fillStyle = st.color;
+    for (var k = 0; k < n; k++) {
+      var ang = rng() * Math.PI * 2;
+      var rr = Math.sqrt(rng()) * R;
+      ctx.beginPath();
+      ctx.arc(p.x * S + Math.cos(ang) * rr, p.y * S + Math.sin(ang) * rr, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function spraySeg(ctx, st, a, b, rng) {
+    var ax = a.x * S, ay = a.y * S, bx = b.x * S, by = b.y * S;
+    var d = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+    var steps = Math.max(1, Math.round(d / Math.max(3, st.w * 0.25)));
+    for (var i2 = 1; i2 <= steps; i2++) {
+      var t = i2 / steps;
+      sprayDot(ctx, st, { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, rng);
+    }
+  }
+
+  function drawStroke(ctx, st) {
+    if (st.brush === "spray") {
+      var rng = mulberry32(st.seed);
+      sprayDot(ctx, st, st.pts[0], rng);
+      for (var i3 = 1; i3 < st.pts.length; i3++) spraySeg(ctx, st, st.pts[i3 - 1], st.pts[i3], rng);
+      return;
+    }
+    dot(ctx, st, st.pts[0]);
+    for (var j3 = 1; j3 < st.pts.length; j3++) seg(ctx, st, st.pts[j3 - 1], st.pts[j3]);
   }
 
   function redrawAll() {
-    clearPad();
-    for (var i = 0; i < strokes.length; i++) {
-      var st = strokes[i];
-      strokeDot(st, st.pts[0]);
-      for (var j = 1; j < st.pts.length; j++) strokeLine(st, st.pts[j - 1], st.pts[j]);
+    fillPaper(gc);
+    for (var i4 = 0; i4 < strokes.length; i4++) {
+      var st = strokes[i4];
+      var a = BRUSH[st.brush].alpha;
+      if (a < 1) {
+        gl.clearRect(0, 0, S, S);
+        drawStroke(gl, st);
+        gc.globalAlpha = a;
+        gc.drawImage(lay, 0, 0);
+        gc.globalAlpha = 1;
+      } else {
+        drawStroke(gc, st);
+      }
     }
+    present();
   }
-  clearPad();
+
+  fillPaper(gc);
+  present();
 
   function pos(e) {
     var r = pad.getBoundingClientRect();
@@ -749,9 +848,24 @@
   pad.addEventListener("pointerdown", function (e) {
     e.preventDefault();
     try { pad.setPointerCapture(e.pointerId); } catch (err) {}
-    cur = { color: erasing ? PAPER : color, w: erasing ? size * 1.8 : size, pts: [pos(e)] };
+    var b = erasing ? "normal" : brush;
+    cur = {
+      brush: b,
+      color: erasing ? PAPER : color,
+      w: erasing ? size * 1.6 : size,
+      pts: [pos(e)],
+      seed: (Math.random() * 4294967295) >>> 0
+    };
     strokes.push(cur);
-    strokeDot(cur, cur.pts[0]);
+    var mode = BRUSH[b].live;
+    if (b === "spray") curRng = mulberry32(cur.seed);
+    if (mode === "fast") {
+      dot(g, cur, cur.pts[0]); dot(gc, cur, cur.pts[0]);
+    } else if (mode === "layer") {
+      gl.clearRect(0, 0, S, S); dot(gl, cur, cur.pts[0]); present();
+    } else {
+      sprayDot(gc, cur, cur.pts[0], curRng); present();
+    }
     resetClearConfirm();
     wakeAudioIfWanted();
   });
@@ -763,27 +877,40 @@
     var last = cur.pts[cur.pts.length - 1];
     if (Math.abs(p.x - last.x) + Math.abs(p.y - last.y) < 0.002) return;
     cur.pts.push(p);
-    strokeLine(cur, last, p);
+    var mode = BRUSH[cur.brush].live;
+    if (mode === "fast") {
+      seg(g, cur, last, p); seg(gc, cur, last, p);
+    } else if (mode === "layer") {
+      seg(gl, cur, last, p); present();
+    } else {
+      spraySeg(gc, cur, last, p, curRng); present();
+    }
   });
 
-  function endStroke() { cur = null; }
+  function endStroke() {
+    if (cur && BRUSH[cur.brush].live === "layer") {
+      gc.globalAlpha = BRUSH[cur.brush].alpha;
+      gc.drawImage(lay, 0, 0);
+      gc.globalAlpha = 1;
+      gl.clearRect(0, 0, S, S);
+    }
+    if (cur) { cur = null; curRng = null; present(); }
+  }
   pad.addEventListener("pointerup", endStroke);
   pad.addEventListener("pointercancel", endStroke);
   pad.addEventListener("pointerleave", endStroke);
 
   /* いろ */
   var colorsBox = $("colors");
-  COLORS.forEach(function (c, i) {
+  COLORS.forEach(function (c, i5) {
     var b = document.createElement("button");
     b.className = "swatch";
     b.style.background = c;
-    b.setAttribute("aria-pressed", i === 0 ? "true" : "false");
-    b.setAttribute("aria-label", "いろ " + (i + 1));
+    b.setAttribute("aria-pressed", i5 === 0 ? "true" : "false");
+    b.setAttribute("aria-label", "いろ " + (i5 + 1));
     b.addEventListener("click", function () {
       color = c;
-      erasing = false;
-      $("eraser").setAttribute("aria-pressed", "false");
-      $("eraser").classList.remove("on");
+      setEraser(false);
       Array.prototype.forEach.call(colorsBox.children, function (el) { el.setAttribute("aria-pressed", "false"); });
       b.setAttribute("aria-pressed", "true");
       wakeAudioIfWanted();
@@ -791,22 +918,46 @@
     colorsBox.appendChild(b);
   });
 
-  /* ふとさ */
-  var sizeBtns = document.querySelectorAll(".size-btn");
-  Array.prototype.forEach.call(sizeBtns, function (b) {
+  /* ふとさ 5だんかい */
+  var sizesBox = $("sizes");
+  SIZES.forEach(function (v, i6) {
+    var b = document.createElement("button");
+    b.className = "size-btn";
+    b.setAttribute("aria-pressed", v === size ? "true" : "false");
+    b.setAttribute("aria-label", "ふとさ " + (i6 + 1));
+    var sp = document.createElement("span");
+    sp.style.width = SIZE_DOTS[i6] + "px";
+    sp.style.height = SIZE_DOTS[i6] + "px";
+    b.appendChild(sp);
     b.addEventListener("click", function () {
-      size = parseInt(b.dataset.size, 10);
-      Array.prototype.forEach.call(sizeBtns, function (o) { o.setAttribute("aria-pressed", "false"); });
+      size = v;
+      Array.prototype.forEach.call(sizesBox.children, function (o) { o.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+      wakeAudioIfWanted();
+    });
+    sizesBox.appendChild(b);
+  });
+
+  /* ふで の しゅるい(ふつう / うすく / スプレー) */
+  var brushBtns = document.querySelectorAll(".brush");
+  Array.prototype.forEach.call(brushBtns, function (b) {
+    b.addEventListener("click", function () {
+      brush = b.getAttribute("data-brush");
+      setEraser(false);
+      Array.prototype.forEach.call(brushBtns, function (o) { o.setAttribute("aria-pressed", "false"); });
       b.setAttribute("aria-pressed", "true");
       wakeAudioIfWanted();
     });
   });
 
   /* けしゴム */
+  function setEraser(on) {
+    erasing = on;
+    $("eraser").setAttribute("aria-pressed", on ? "true" : "false");
+    $("eraser").classList.toggle("on", on);
+  }
   $("eraser").addEventListener("click", function () {
-    erasing = !erasing;
-    $("eraser").setAttribute("aria-pressed", erasing ? "true" : "false");
-    $("eraser").classList.toggle("on", erasing);
+    setEraser(!erasing);
     wakeAudioIfWanted();
   });
 
@@ -844,12 +995,12 @@
     wakeAudioIfWanted();
     if (strokes.length === 0) { toast("まだ なにも かいて いません"); return; }
 
-    var full = pad.toDataURL("image/png");
+    var full = com.toDataURL("image/png");
     var tc = document.createElement("canvas");
     tc.width = 360; tc.height = 360;
     var tg = tc.getContext("2d");
     tg.fillStyle = PAPER; tg.fillRect(0, 0, 360, 360);
-    tg.drawImage(pad, 0, 0, 360, 360);
+    tg.drawImage(com, 0, 0, 360, 360);
     var thumb = tc.toDataURL("image/png");
 
     var now = new Date();
