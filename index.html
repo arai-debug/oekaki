@@ -387,6 +387,12 @@
   }
   #zoom p { color: #F4F7F2; font-weight: 900; font-size: 19px; margin: 0; text-align: center; text-wrap: balance; word-break: keep-all; overflow-wrap: break-word; }
   #zoom .hint { font-size: 14px; font-weight: 700; color: #C3CFC4; }
+  #zoom .btn-row2 {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
 
   .toast {
     position: fixed;
@@ -1160,6 +1166,48 @@
     }
   }
 
+  // データURL を ファイルの かたち に なおす
+  function dataURLtoBlob(u) {
+    var parts = u.split(",");
+    var mime = (parts[0].match(/:(.*?);/) || [])[1] || "image/png";
+    var bin = atob(parts[1]);
+    var n = bin.length;
+    var arr = new Uint8Array(n);
+    while (n--) arr[n] = bin.charCodeAt(n);
+    return new Blob([arr], { type: mime });
+  }
+
+  // しゃしんに ほぞん(iPhone は きょうゆうシート から「画像を保存」)
+  function savePhoto(p) {
+    var name = "oekaki-" + p.id + ".png";
+    var file = null;
+    try {
+      file = new File([dataURLtoBlob(p.img)], name, { type: "image/png" });
+    } catch (e) {
+      file = null;
+    }
+
+    if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: p.odai })["catch"](function () {
+        // やめた ときは なにも しない
+      });
+      return;
+    }
+
+    // きょうゆうシートが つかえない ときは ダウンロード
+    try {
+      var a = document.createElement("a");
+      a.href = p.img;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast("がぞうを ほぞん しました");
+    } catch (e2) {
+      toast("この ブラウザでは ほぞん できません");
+    }
+  }
+
   function zoom(p) {
     var ov = document.createElement("div");
     ov.id = "zoom";
@@ -1179,13 +1227,23 @@
     hint.className = "hint";
     hint.textContent = "えを さわると うごくよ";
 
+    var save = document.createElement("button");
+    save.textContent = "しゃしんに ほぞん";
+
     var close = document.createElement("button");
     close.textContent = "とじる";
+
+    var row = document.createElement("div");
+    row.className = "btn-row2";
+    row.appendChild(save);
+    row.appendChild(close);
 
     ov.appendChild(stage);
     ov.appendChild(cap);
     ov.appendChild(hint);
-    ov.appendChild(close);
+    ov.appendChild(row);
+
+    save.addEventListener("click", function () { savePhoto(p); });
 
     stage.addEventListener("pointerdown", function (e) {
       e.preventDefault();
