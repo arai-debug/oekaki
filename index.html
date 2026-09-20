@@ -230,13 +230,16 @@
   .canvas-wrap {
     flex: 1;
     min-height: 0;
-    display: grid;
-    place-items: center;
+    position: relative;
+    /* がめんの はしまで つかう(#app の よこ よはくを うちけす) */
+    margin-inline: -12px;
   }
 
   canvas#pad {
-    max-height: 100%;
-    max-width: 100%;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
     background: var(--paper);
     border: 2px solid var(--line);
     border-radius: var(--r-md);
@@ -294,6 +297,21 @@
   }
   .brush-ic { fill: currentColor !important; stroke: none !important; }
 
+  /* どうぐを たたんだ ときの ほそい バー */
+  .minibar {
+    display: grid;
+    grid-template-columns: 52px 1fr 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+  .minibar .now-color {
+    height: 46px;
+    border-radius: 50%;
+    border: 3px solid var(--surface);
+    box-shadow: 0 0 0 2px var(--line);
+    padding: 0;
+  }
+
   /* ---- ほんだな ---- */
   .shelf-grid {
     flex: 1;
@@ -319,8 +337,8 @@
   }
   .shelf-item img {
     width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
+    aspect-ratio: 3 / 4;
+    object-fit: contain;
     border-radius: var(--r-sm);
     background: var(--paper);
     display: block;
@@ -452,13 +470,17 @@
       </button>
       <span class="odai-bar" id="odai-mini"></span>
       <div class="spacer"></div>
+      <button class="icon-btn" id="tools-toggle" aria-pressed="true" aria-label="どうぐを たたむ">
+        <svg viewBox="0 0 24 24"><path d="M12 3.2c-4.9 0-8.8 3.6-8.8 8.1 0 4.5 3.9 8.1 8.8 8.1 1 0 1.8-.8 1.8-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.1 0-1 .8-1.8 1.8-1.8h1.6c2.7 0 4.6-1.9 4.6-4.4 0-3.9-3.9-5.9-8.8-5.9z"/><circle cx="7.6" cy="12.3" r="1.1"/><circle cx="9.6" cy="8.6" r="1.1"/><circle cx="14.2" cy="8.2" r="1.1"/></svg>
+      </button>
       <button class="icon-btn" id="bgm-2" aria-label="おんがく">
         <svg viewBox="0 0 24 24"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>
       </button>
     </div>
 
-    <div class="canvas-wrap"><canvas id="pad" width="1200" height="1200"></canvas></div>
+    <div class="canvas-wrap"><canvas id="pad" width="1080" height="1440"></canvas></div>
 
+    <div id="toolbox">
     <div class="colors" id="colors"></div>
 
     <div class="sizes" id="sizes"></div>
@@ -485,6 +507,13 @@
       <button class="icon-btn" id="clear" aria-label="ぜんぶ けす">
         <svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V5h6v2"/><path d="M7 7l1 12h8l1-12"/></svg>
       </button>
+    </div>
+    </div>
+
+    <div class="minibar" id="minibar" hidden>
+      <button class="now-color" id="now-color" aria-label="いろを えらぶ"></button>
+      <button id="mini-undo">もどす</button>
+      <button id="mini-open">どうぐ</button>
     </div>
 
     <button class="btn-main" id="done">かんせい!</button>
@@ -771,15 +800,15 @@
   /* ========== おえかき ========== */
   var pad = $("pad");
   var g = pad.getContext("2d");
-  var S = 1200;
+  var W = 1080, H = 1440;
 
   // かきおわった せん をためる ばしょ と、いま ひいている せん の ばしょ
-  var com = document.createElement("canvas"); com.width = S; com.height = S;
+  var com = document.createElement("canvas"); com.width = W; com.height = H;
   var gc = com.getContext("2d");
-  var lay = document.createElement("canvas"); lay.width = S; lay.height = S;
+  var lay = document.createElement("canvas"); lay.width = W; lay.height = H;
   var gl = lay.getContext("2d");
 
-  var SIZES = [8, 18, 34, 60, 110];
+  var SIZES = [7, 16, 31, 54, 99];
   var SIZE_DOTS = [7, 11, 16, 22, 30];
   var BRUSH = {
     normal: { alpha: 1,    live: "fast" },
@@ -794,7 +823,22 @@
   var brush = "normal";
   var erasing = false;
 
-  function sizeCanvas() { /* CSS が おおきさを きめる。なかみは 1200x1200 で こてい */ }
+  // キャンバスの みため の おおきさを、いれものに ぴったり あわせる
+  // (CSS の max-height だけでは はみ出すので、けいさんして きめる)
+  function sizeCanvas() {
+    var wrap = pad.parentNode;
+    var availW = wrap.clientWidth;
+    var availH = wrap.clientHeight;
+    if (!availW || !availH) return;
+    // ★わくせん(border)は はば の そとがわ に つくので、
+    //   その ぶんを ひかないと よこに はみ出す
+    var bw = parseFloat(getComputedStyle(pad).borderLeftWidth) * 2 || 0;
+    var scale = Math.min((availW - bw) / W, (availH - bw) / H);
+    pad.style.width = Math.floor(W * scale) + "px";
+    pad.style.height = Math.floor(H * scale) + "px";
+  }
+  window.addEventListener("resize", sizeCanvas);
+  window.addEventListener("orientationchange", function () { setTimeout(sizeCanvas, 200); });
 
   // スプレーの つぶを「まいかい おなじ ばしょ」に もどせるようにする
   function mulberry32(a) {
@@ -806,10 +850,10 @@
     };
   }
 
-  function fillPaper(ctx) { ctx.fillStyle = PAPER; ctx.fillRect(0, 0, S, S); }
+  function fillPaper(ctx) { ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H); }
 
   function present() {
-    g.clearRect(0, 0, S, S);
+    g.clearRect(0, 0, W, H);
     g.drawImage(com, 0, 0);
     if (cur && BRUSH[cur.brush].live === "layer") {
       g.globalAlpha = BRUSH[cur.brush].alpha;
@@ -821,7 +865,7 @@
   function dot(ctx, st, p) {
     ctx.fillStyle = st.color;
     ctx.beginPath();
-    ctx.arc(p.x * S, p.y * S, st.w / 2, 0, Math.PI * 2);
+    ctx.arc(p.x * W, p.y * H, st.w / 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -831,8 +875,8 @@
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(a.x * S, a.y * S);
-    ctx.lineTo(b.x * S, b.y * S);
+    ctx.moveTo(a.x * W, a.y * H);
+    ctx.lineTo(b.x * W, b.y * H);
     ctx.stroke();
   }
 
@@ -845,13 +889,13 @@
       var ang = rng() * Math.PI * 2;
       var rr = Math.sqrt(rng()) * R;
       ctx.beginPath();
-      ctx.arc(p.x * S + Math.cos(ang) * rr, p.y * S + Math.sin(ang) * rr, r, 0, Math.PI * 2);
+      ctx.arc(p.x * W + Math.cos(ang) * rr, p.y * H + Math.sin(ang) * rr, r, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
   function spraySeg(ctx, st, a, b, rng) {
-    var ax = a.x * S, ay = a.y * S, bx = b.x * S, by = b.y * S;
+    var ax = a.x * W, ay = a.y * H, bx = b.x * W, by = b.y * H;
     var d = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
     var steps = Math.max(1, Math.round(d / Math.max(3, st.w * 0.25)));
     for (var i2 = 1; i2 <= steps; i2++) {
@@ -882,13 +926,13 @@
   // ぬりつぶし。せんの まわりが ぼやけて いるので、すこし はばを もたせて はんてい する
   var FILL_TOL = 150;   // あか+みどり+あお の ちがいの ごうけい
   function floodFill(ctx, at, hex) {
-    var x0 = Math.round(at.x * (S - 1));
-    var y0 = Math.round(at.y * (S - 1));
-    if (x0 < 0 || y0 < 0 || x0 >= S || y0 >= S) return false;
+    var x0 = Math.round(at.x * (W - 1));
+    var y0 = Math.round(at.y * (H - 1));
+    if (x0 < 0 || y0 < 0 || x0 >= W || y0 >= H) return false;
 
-    var img = ctx.getImageData(0, 0, S, S);
+    var img = ctx.getImageData(0, 0, W, H);
     var d = img.data;
-    var i0 = (y0 * S + x0) * 4;
+    var i0 = (y0 * W + x0) * 4;
     var sr = d[i0], sg = d[i0 + 1], sb = d[i0 + 2];
     var c = hexToRgb(hex);
 
@@ -900,21 +944,21 @@
       return Math.abs(d[i] - sr) + Math.abs(d[i + 1] - sg) + Math.abs(d[i + 2] - sb) <= FILL_TOL;
     }
 
-    var seen = new Uint8Array(S * S);
+    var seen = new Uint8Array(W * H);
     var painted = 0;
     var stack = [x0, y0];
     while (stack.length) {
       var y = stack.pop();
       var x = stack.pop();
-      var p = y * S + x;
+      var p = y * W + x;
       if (seen[p] || !match(p)) continue;
 
       var xl = x, pl = p;
       while (xl > 0 && !seen[pl - 1] && match(pl - 1)) { xl--; pl--; }
       var xr = x, pr = p;
-      while (xr < S - 1 && !seen[pr + 1] && match(pr + 1)) { xr++; pr++; }
+      while (xr < W - 1 && !seen[pr + 1] && match(pr + 1)) { xr++; pr++; }
 
-      for (var xx = xl, pp = y * S + xl; xx <= xr; xx++, pp++) {
+      for (var xx = xl, pp = y * W + xl; xx <= xr; xx++, pp++) {
         seen[pp] = 1;
         painted++;
         var q = pp * 4;
@@ -922,13 +966,13 @@
       }
       if (y > 0) {
         for (var xa = xl; xa <= xr; xa++) {
-          var pu = (y - 1) * S + xa;
+          var pu = (y - 1) * W + xa;
           if (!seen[pu] && match(pu)) stack.push(xa, y - 1);
         }
       }
-      if (y < S - 1) {
+      if (y < H - 1) {
         for (var xb = xl; xb <= xr; xb++) {
-          var pdn = (y + 1) * S + xb;
+          var pdn = (y + 1) * W + xb;
           if (!seen[pdn] && match(pdn)) stack.push(xb, y + 1);
         }
       }
@@ -945,7 +989,7 @@
       if (st.kind === "fill") { floodFill(gc, st.at, st.color); continue; }
       var a = BRUSH[st.brush].alpha;
       if (a < 1) {
-        gl.clearRect(0, 0, S, S);
+        gl.clearRect(0, 0, W, H);
         drawStroke(gl, st);
         gc.globalAlpha = a;
         gc.drawImage(lay, 0, 0);
@@ -1000,7 +1044,7 @@
     if (mode === "fast") {
       dot(g, cur, cur.pts[0]); dot(gc, cur, cur.pts[0]);
     } else if (mode === "layer") {
-      gl.clearRect(0, 0, S, S); dot(gl, cur, cur.pts[0]); present();
+      gl.clearRect(0, 0, W, H); dot(gl, cur, cur.pts[0]); present();
     } else {
       sprayDot(gc, cur, cur.pts[0], curRng); present();
     }
@@ -1030,7 +1074,7 @@
       gc.globalAlpha = BRUSH[cur.brush].alpha;
       gc.drawImage(lay, 0, 0);
       gc.globalAlpha = 1;
-      gl.clearRect(0, 0, S, S);
+      gl.clearRect(0, 0, W, H);
     }
     if (cur) { cur = null; curRng = null; present(); }
   }
@@ -1093,6 +1137,7 @@
     erasing = on;
     $("eraser").setAttribute("aria-pressed", on ? "true" : "false");
     $("eraser").classList.toggle("on", on);
+    paintNowColor();
     // けしゴム中に バケツの ままだと まぎらわしいので ふつうの ふで に もどす
     if (on && brush === "fill") {
       brush = "normal";
@@ -1135,6 +1180,36 @@
     resetClearConfirm();
   });
 
+  /* ========== どうぐの たたみ ========== */
+  var toolbox = $("toolbox");
+  var minibar = $("minibar");
+  var toggleBtn = $("tools-toggle");
+  var toolsOpen = pref("tools") !== "0";
+
+  function paintNowColor() {
+    var el = $("now-color");
+    if (el) el.style.background = erasing ? PAPER : color;
+  }
+
+  function setTools(open) {
+    toolsOpen = open;
+    toolbox.hidden = !open;
+    minibar.hidden = open;
+    toggleBtn.setAttribute("aria-pressed", open ? "true" : "false");
+    toggleBtn.classList.toggle("on", !open);
+    toggleBtn.setAttribute("aria-label", open ? "どうぐを たたむ" : "どうぐを だす");
+    paintNowColor();
+    pref("tools", open ? "1" : "0");
+    sizeCanvas();
+  }
+
+  toggleBtn.addEventListener("click", function () { setTools(!toolsOpen); wakeAudioIfWanted(); });
+  $("mini-open").addEventListener("click", function () { setTools(true); wakeAudioIfWanted(); });
+  $("now-color").addEventListener("click", function () { setTools(true); wakeAudioIfWanted(); });
+  $("mini-undo").addEventListener("click", function () { $("undo").click(); });
+
+  setTools(toolsOpen);
+
   /* ========== かんせい ========== */
   $("done").addEventListener("click", function () {
     wakeAudioIfWanted();
@@ -1142,10 +1217,10 @@
 
     var full = com.toDataURL("image/png");
     var tc = document.createElement("canvas");
-    tc.width = 360; tc.height = 360;
+    tc.width = 300; tc.height = 400;
     var tg = tc.getContext("2d");
-    tg.fillStyle = PAPER; tg.fillRect(0, 0, 360, 360);
-    tg.drawImage(com, 0, 0, 360, 360);
+    tg.fillStyle = PAPER; tg.fillRect(0, 0, 300, 400);
+    tg.drawImage(com, 0, 0, 300, 400);
     var thumb = tc.toDataURL("image/png");
 
     var now = new Date();
