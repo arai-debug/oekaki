@@ -361,13 +361,32 @@
     box-sizing: border-box;
     z-index: 20;
   }
-  #zoom img {
+  .zoom-stage {
+    position: relative;
     max-width: 100%;
-    max-height: 70%;
+    max-height: 66%;
+    line-height: 0;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    cursor: pointer;
+  }
+  .zoom-stage img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
     border-radius: var(--r-md);
     background: var(--paper);
+    will-change: transform;
   }
-  #zoom p { color: #F4F7F2; font-weight: 900; font-size: 19px; margin: 0; text-align: center; text-wrap: balance; }
+  .spark {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  #zoom p { color: #F4F7F2; font-weight: 900; font-size: 19px; margin: 0; text-align: center; text-wrap: balance; word-break: keep-all; overflow-wrap: break-word; }
+  #zoom .hint { font-size: 14px; font-weight: 700; color: #C3CFC4; }
 
   .toast {
     position: fixed;
@@ -1057,18 +1076,101 @@
     });
   }
 
+  function reduceMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  // さわった とき の おと(おんぷボタンが ON の ときだけ)
+  function pon() {
+    if (!bgmOn) return;
+    if (!ensureAudio()) return;
+    if (actx.state === "suspended") actx.resume();
+    var NOTES = [523.25, 587.33, 659.25, 783.99, 880.00];
+    var f = NOTES[Math.floor(Math.random() * NOTES.length)];
+    var t = actx.currentTime + 0.01;
+    pluck(f, t, 0.55, 0.22);
+    pluck(f * 1.5, t + 0.05, 0.42, 0.11);
+  }
+
+  // ぷるん と はねる
+  function boing(im) {
+    if (reduceMotion() || !im.animate) return;
+    if (im.getAnimations) {
+      im.getAnimations().forEach(function (a) { a.cancel(); });
+    }
+    im.animate([
+      { transform: "scale(1, 1)" },
+      { transform: "scale(1.14, 0.86)" },
+      { transform: "scale(0.92, 1.10)" },
+      { transform: "scale(1.05, 0.96)" },
+      { transform: "scale(0.99, 1.01)" },
+      { transform: "scale(1, 1)" }
+    ], { duration: 560, easing: "ease-out" });
+  }
+
+  // さわった ところから つぶが とびちる
+  function sparkle(stage, x, y) {
+    if (reduceMotion()) return;
+    for (var i = 0; i < 13; i++) {
+      var sp = document.createElement("i");
+      sp.className = "spark";
+      sp.style.background = COLORS[Math.floor(Math.random() * COLORS.length)];
+      sp.style.left = (x - 7) + "px";
+      sp.style.top = (y - 7) + "px";
+      stage.appendChild(sp);
+      if (!sp.animate) { sp.remove(); continue; }
+      var ang = Math.random() * Math.PI * 2;
+      var dist = 55 + Math.random() * 95;
+      var a = sp.animate([
+        { transform: "translate(0, 0) scale(1)", opacity: 1 },
+        {
+          transform: "translate(" + (Math.cos(ang) * dist).toFixed(1) + "px, " +
+            (Math.sin(ang) * dist).toFixed(1) + "px) scale(0.25)",
+          opacity: 0
+        }
+      ], { duration: 560 + Math.random() * 320, easing: "cubic-bezier(.2,.7,.3,1)" });
+      (function (el) { a.onfinish = function () { el.remove(); }; })(sp);
+    }
+  }
+
   function zoom(p) {
     var ov = document.createElement("div");
     ov.id = "zoom";
+
+    var stage = document.createElement("div");
+    stage.className = "zoom-stage";
     var im = document.createElement("img");
     im.src = p.img;
     im.alt = p.odai;
+    im.draggable = false;
+    stage.appendChild(im);
+
     var cap = document.createElement("p");
     cap.textContent = p.odai;
+
+    var hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "えを さわると うごくよ";
+
     var close = document.createElement("button");
     close.textContent = "とじる";
-    ov.appendChild(im); ov.appendChild(cap); ov.appendChild(close);
-    ov.addEventListener("click", function () { ov.remove(); });
+
+    ov.appendChild(stage);
+    ov.appendChild(cap);
+    ov.appendChild(hint);
+    ov.appendChild(close);
+
+    stage.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+      var r = stage.getBoundingClientRect();
+      boing(im);
+      sparkle(stage, e.clientX - r.left, e.clientY - r.top);
+      pon();
+    });
+
+    // とじるのは ボタンだけ。まちがって けしてしまわないように
+    close.addEventListener("click", function () { ov.remove(); });
+
     document.body.appendChild(ov);
   }
 
